@@ -1,0 +1,224 @@
+// ---------------------------------------------------------------------------
+// STM32F303xC (LQFP100) — plateforme Renode pour le firmware IER Steamovap
+//
+// Dérivée des données de ../ier :
+//   - ldscripts/mem.ld       : 256K flash, 40K SRAM, 8K CCMRAM
+//   - Release/src/subdir.mk  : cortex-m4 + fpv4-sp-d16, HSE_VALUE=8000000
+//   - src/hal.c              : périphériques réellement utilisés
+//   - system/src/cmsis/vectors_stm32f30x.c : numéros d'IRQ (RM0316)
+//
+// Le modèle RCC (Miscellaneous.STM32F3_RCC) est défini dans
+// peripherals/STM32F3_RCC.cs et doit être chargé AVANT cette plateforme.
+// ---------------------------------------------------------------------------
+
+cpu: CPU.CortexM @ sysbus
+    cpuType: "cortex-m4f"
+    nvic: nvic
+
+nvic: IRQControllers.NVIC @ sysbus 0xE000E000
+    priorityMask: 0xF0
+    systickFrequency: 72000000
+    IRQ -> cpu@0
+
+// --------------------------------- Mémoires --------------------------------
+
+flash: Memory.MappedMemory @ {
+        sysbus 0x08000000;
+        sysbus 0x00000000       // alias de boot (BOOT0 = 0)
+    }
+    size: 0x40000
+
+sram: Memory.MappedMemory @ sysbus 0x20000000
+    size: 0xA000
+
+ccmram: Memory.MappedMemory @ sysbus 0x10000000
+    size: 0x2000
+
+// System memory + option bytes. Contient les valeurs d'étalonnage usine ST lues
+// par hal.c:394-396 (TS_CAL 0x1FFFF7B8/0x1FFFF7C2, VREFINT_CAL 0x1FFFF7BA) :
+// sans elles, adc_conv divise par zéro sur la compensation Vrefint.
+// Les valeurs sont écrites par la macro factory_calibration (scripts/sensors.resc).
+sysmem: Memory.MappedMemory @ sysbus 0x1FFFD800
+    size: 0x2800
+
+// Régions bit-band. Indispensables : la lib standard periph passe par le
+// bit-banding pour RCC_LSICmd, PWR_BackupAccessCmd, RCC_BackupResetCmd... et
+// sans elles le firmware attend indéfiniment LSIRDY (hal.c:2771).
+bitbandPeripherals: Miscellaneous.BitBanding @ sysbus <0x42000000, +0x2000000>
+    peripheralBase: 0x40000000
+
+bitbandSram: Miscellaneous.BitBanding @ sysbus <0x22000000, +0x2000000>
+    peripheralBase: 0x20000000
+
+// ------------------------------ Horloges / système -------------------------
+
+rcc: Miscellaneous.STM32F3_RCC @ sysbus 0x40021000
+
+// Interface flash : ACR (latence, prefetch) écrit par SystemInit, et
+// déverrouillage/effacement utilisés par sov_eeflash (EEPROM émulée en flash,
+// 0x08030000-0x08040000). Modèle défini dans peripherals/, le contrôleur F4 de
+// Renode plaçant le bit LOCK ailleurs que le F3.
+flashCtrl: MTD.IER_STM32F3_FlashController @ sysbus 0x40022000
+    flash: flash
+    flashBaseAddress: 0x08000000
+    pageSize: 0x800
+
+pwr: Miscellaneous.STM32_PWR @ sysbus 0x40007000
+
+syscfg: Miscellaneous.STM32_SYSCFG @ sysbus 0x40010000
+
+crc: CRC.STM32_CRC @ sysbus 0x40023000
+    series: STM32Series.F0       // même IP que F3
+    configurablePoly: true       // le F3 permet de programmer le polynôme
+
+// --------------------------------- EXTI ------------------------------------
+
+exti: IRQControllers.STM32F4_EXTI @ sysbus 0x40010400
+    numberOfOutputLines: 36
+    [0-4] -> nvic@[6-10]
+    [5-9] -> nvicInputExti9_5@[0-4]
+    [10-15] -> nvicInputExti15_10@[0-5]
+    [17] -> nvic@[41]            // RTC alarm
+
+nvicInputExti9_5: Miscellaneous.CombinedInput @ none
+    numberOfInputs: 5
+    -> nvic@23
+
+nvicInputExti15_10: Miscellaneous.CombinedInput @ none
+    numberOfInputs: 6
+    -> nvic@40                   // EXTI15_10_IRQHandler : resync NSS SPI (PB12)
+
+// --------------------------------- GPIO ------------------------------------
+
+gpioPortA: GPIOPort.STM32_GPIOPort @ sysbus <0x48000000, +0x400>
+    modeResetValue: 0xA8000000
+    pullUpPullDownResetValue: 0x64000000
+    numberOfAFs: 16
+    [0-15] -> exti@[0-15]
+
+gpioPortB: GPIOPort.STM32_GPIOPort @ sysbus <0x48000400, +0x400>
+    modeResetValue: 0x00000280
+    pullUpPullDownResetValue: 0x00000100
+    numberOfAFs: 16
+    [0-15] -> exti@[0-15]
+
+gpioPortC: GPIOPort.STM32_GPIOPort @ sysbus <0x48000800, +0x400>
+    numberOfAFs: 16
+    [0-15] -> exti@[0-15]
+
+gpioPortD: GPIOPort.STM32_GPIOPort @ sysbus <0x48000C00, +0x400>
+    numberOfAFs: 16
+    [0-15] -> exti@[0-15]
+
+gpioPortE: GPIOPort.STM32_GPIOPort @ sysbus <0x48001000, +0x400>
+    numberOfAFs: 16
+    [0-15] -> exti@[0-15]
+
+gpioPortF: GPIOPort.STM32_GPIOPort @ sysbus <0x48001400, +0x400>
+    numberOfAFs: 16
+    [0-15] -> exti@[0-15]
+
+// ---------------------------------- DMA ------------------------------------
+
+// DMA1 « channel-based » (7 canaux utilisés sur F3) :
+//   ch1 -> ADC1, ch4/ch5 -> SPI2 rx/tx, ch6 -> USART2
+dma1: DMA.STM32LDMA @ sysbus 0x40020000
+    [0-6] -> nvic@[11-17]
+
+// --------------------------------- Analogique ------------------------------
+
+// Occupe 0x400 : couvre ADC1 (0x50000000), ADC2 (0x...100) et
+// les registres communs ADC1_2 (0x...300).
+// Modèle défini dans peripherals/IER_STM32F3_ADC.cs : le séquenceur intégré de
+// Renode est limité à 4 conversions, le firmware en programme 9.
+// Les tensions se règlent à chaud :  sysbus.adc1 SetVoltage 4 1.56
+adc1: Analog.IER_STM32F3_ADC @ sysbus 0x50000000
+    referenceVoltage: 3.3
+    dmaChannel: 1                // DMA1_Channel1
+    dmaPeripheral: dma1
+    -> nvic@18
+
+// ------------------------------ Communication ------------------------------
+
+// SPI2 esclave (écran 7") : Renode ne modélise que le mode maître,
+// les registres restent accessibles mais aucun trafic n'est simulé.
+spi2: SPI.STM32SPI @ sysbus 0x40003800
+    series: STM32Series.F0
+    IRQ -> nvic@36
+    DMAReceive -> dma1@3         // DMA1_Channel4
+    DMASend -> dma1@4            // DMA1_Channel5
+
+usart1: UART.STM32F7_USART @ sysbus 0x40013800
+    frequency: 72000000          // APB2
+    IRQ -> nvic@37               // Modbus RTU (USE_MODBUS_USART1)
+
+usart2: UART.STM32F7_USART @ sysbus 0x40004400
+    frequency: 36000000          // APB1
+    IRQ -> nvic@38
+
+usart3: UART.STM32F7_USART @ sysbus 0x40004800
+    frequency: 36000000          // APB1
+    IRQ -> nvic@39
+
+// --------------------------------- Timers ----------------------------------
+
+timer1: Timers.STM32_Timer @ sysbus 0x40012C00
+    frequency: 72000000
+    initialLimit: 0xFFFF
+    [BreakInterrupt, UpdateInterrupt, TriggerInterrupt, CommutationInterrupt] -> nvic@[24, 25, 26, 26]
+    CaptureCompareInterrupt -> nvic@27      // TIM1_CC : PWM SSR
+
+timer2: Timers.STM32_Timer @ sysbus 0x40000000
+    frequency: 72000000
+    initialLimit: 0xFFFFFFFF
+    -> nvic@28                              // tick API
+
+timer3: Timers.STM32_Timer @ sysbus 0x40000400
+    frequency: 72000000
+    initialLimit: 0xFFFF
+    -> nvic@29                              // timer de la pile FreeModbus
+
+timer4: Timers.STM32_Timer @ sysbus 0x40000800
+    frequency: 72000000
+    initialLimit: 0xFFFF
+    -> nvic@30
+
+timer8: Timers.STM32_Timer @ sysbus 0x40013400
+    frequency: 72000000
+    initialLimit: 0xFFFF
+    [BreakInterrupt, UpdateInterrupt, TriggerInterrupt, CommutationInterrupt] -> nvic@[43, 44, 45, 45]
+    CaptureCompareInterrupt -> nvic@46      // TIM8_CC : PWM SSR
+
+// ------------------------------- Watchdog / RTC ----------------------------
+
+iwdg: Timers.STM32_IndependentWatchdog @ sysbus 0x40003000
+    frequency: 40000             // LSI
+    windowOption: false          // pas de registre WINR sur F3
+
+rtc: Timers.STM32F4_RTC @ sysbus 0x40002800
+    AlarmIRQ -> exti@17
+
+// ---------------------- Blocs non modélisés (silencieux) -------------------
+
+sysbus:
+    init:
+        Tag <0x40002C00, 0x40002FFF> "WWDG"
+        Tag <0x40004C00, 0x40004FFF> "UART4"
+        Tag <0x40005000, 0x400053FF> "UART5"
+        Tag <0x40005400, 0x400057FF> "I2C1"
+        Tag <0x40005800, 0x40005BFF> "I2C2"
+        Tag <0x40005C00, 0x40005FFF> "USB"
+        Tag <0x40006400, 0x400067FF> "CAN"
+        Tag <0x40007400, 0x400077FF> "DAC1"
+        Tag <0x40009800, 0x40009BFF> "I2C3"
+        Tag <0x40010000, 0x400103FF> "SYSCFG_COMP_OPAMP"
+        Tag <0x40012400, 0x400127FF> "ADC_LEGACY"
+        Tag <0x40013000, 0x400133FF> "SPI1"
+        Tag <0x40013C00, 0x40013FFF> "SPI4"
+        Tag <0x40014000, 0x400143FF> "TIM15"
+        Tag <0x40014400, 0x400147FF> "TIM16"
+        Tag <0x40014800, 0x40014BFF> "TIM17"
+        Tag <0x40020400, 0x400207FF> "DMA2"
+        Tag <0x40024000, 0x400243FF> "TSC"
+        Tag <0x50000400, 0x500007FF> "ADC3_4"
+        Tag <0xE0042000, 0xE00423FF> "DBGMCU"

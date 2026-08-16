@@ -1,0 +1,154 @@
+:name: Stimuli capteurs IER
+:description: Profils de valeurs analogiques et étalonnage usine simulé
+
+# ---------------------------------------------------------------------------
+# Les tensions présentées à l'ADC se règlent à chaud, en volts vus par l'ADC :
+#
+#   sysbus.adc1 SetVoltage 4 1.676     # règle la température d'eau
+#   sysbus.adc1 GetVoltage 4           # relit la consigne courante
+#
+# Canaux (séquence programmée par ADC_init, ../ier/src/hal.c) :
+#
+#   1  (PA0)  wl  niveau d'eau          5  (PF4)  hl  limite haute
+#   2  (PA1)  ad  demande analogique    8  (PC2)  et  température coffret
+#   3  (PA2)  rh  humidité de gaine     16        température interne du µC
+#   4  (PA3)  wt  température d'eau     18        Vrefint
+#
+# Conversions appliquées par le firmware (adc_conv, hal.c, branche
+# IERPCB001v3_0) — les entrées 0-10 V passent par un pont 10 V -> 3.0 V :
+#
+#   grandeurs en %  (ad, rh, hl) :  V_adc = pourcentage x 0.03
+#   niveau d'eau (wl)            :  V_adc = tension_capteur x 0.30
+#   PT1000 (wt, et)              :  courbe en racine carrée, très non linéaire.
+#                                   Points calculés à partir de la formule :
+#                                     1.500 V -> -21 °C     1.676 V -> 20 °C
+#                                     1.612 V ->   5 °C     1.846 V -> 60 °C
+#                                     1.560 V ->  -7 °C     2.014 V -> 100 °C
+#
+# Ne jamais mettre le canal 18 à 0 : adc_conv divise par la moyenne des deux
+# échantillons Vrefint (hal.c:1991).
+#
+# Un échantillon est pris toutes les 250 ms (TASK_READ_SENSOR_TICKS) et le
+# buffer circulaire fait 50 entrées : après un changement, laisser tourner au
+# moins 250 ms pour voir l'effet, et 12,5 s pour que tout le buffer soit à jour.
+# ---------------------------------------------------------------------------
+
+# Valeurs d'étalonnage relevées en usine par ST, lues par hal.c:394-396.
+macro factory_calibration
+"""
+    sysbus WriteWord 0x1FFFF7B8 1750    # TS_CAL1  (30 °C)
+    sysbus WriteWord 0x1FFFF7BA 1526    # VREFINT_CAL (1.23 V -> 1526 LSB)
+    sysbus WriteWord 0x1FFFF7C2 1400    # TS_CAL2  (110 °C)
+"""
+
+# Appliqué au reset : pas de demande, cuve à 3 V capteur, eau à ~20 °C.
+macro default_sensors
+"""
+    runMacro $factory_calibration
+    sysbus.adc1 SetVoltage 1 0.90       # wl : capteur à 3.0 V
+    sysbus.adc1 SetVoltage 2 0          # ad : demande 0 %
+    sysbus.adc1 SetVoltage 3 1.50       # rh : 50 %
+    sysbus.adc1 SetVoltage 4 1.676      # wt : ~20 °C
+    sysbus.adc1 SetVoltage 5 0          # hl : 0 %
+    sysbus.adc1 SetVoltage 8 1.676      # et : ~20 °C
+    sysbus.adc1 SetVoltage 16 1.43      # température interne, ~25 °C
+    sysbus.adc1 SetVoltage 18 1.23      # Vrefint
+"""
+
+# ------------------------------ Entrées tout ou rien -----------------------
+# Mapping relevé dans gpi_update (hal.c, branche IERPCB001v2_10) :
+#
+#   PB8  ENA  interrupteur ENABLE (son absence déclenche une alarme,
+#             cf. USE_ENABLE_SWITCH_AS_ALARM)
+#   PB9  AFS  contrôleur de débit d'air
+#   PF9  HLH  niveau haut matériel
+#   PF10 FS   détecteur de mousse
+#
+# Pilotage direct :  sysbus.gpioPortB OnGPIO 8 true
+
+macro inputs_idle
+"""
+    sysbus.gpioPortB OnGPIO 8 false
+    sysbus.gpioPortB OnGPIO 9 false
+    sysbus.gpioPortF OnGPIO 9 false
+    sysbus.gpioPortF OnGPIO 10 false
+"""
+
+# Machine autorisée à fonctionner : ENABLE fermé et débit d'air présent.
+macro inputs_running
+"""
+    sysbus.gpioPortB OnGPIO 8 true
+    sysbus.gpioPortB OnGPIO 9 true
+    sysbus.gpioPortF OnGPIO 9 false
+    sysbus.gpioPortF OnGPIO 10 false
+"""
+
+macro enable_on
+"""
+    sysbus.gpioPortB OnGPIO 8 true
+"""
+
+macro enable_off
+"""
+    sysbus.gpioPortB OnGPIO 8 false
+"""
+
+macro airflow_on
+"""
+    sysbus.gpioPortB OnGPIO 9 true
+"""
+
+macro airflow_off
+"""
+    sysbus.gpioPortB OnGPIO 9 false
+"""
+
+# --------------------------- Profils prêts à l'emploi ----------------------
+# À lancer pendant que l'émulation tourne :  runMacro $demand_50
+
+macro demand_0
+"""
+    sysbus.adc1 SetVoltage 2 0
+"""
+
+macro demand_50
+"""
+    sysbus.adc1 SetVoltage 2 1.50
+"""
+
+macro demand_100
+"""
+    sysbus.adc1 SetVoltage 2 3.00
+"""
+
+# Cuve vide / cuve pleine (capteur MOJO 0,5-5 V)
+macro tank_empty
+"""
+    sysbus.adc1 SetVoltage 1 0.15
+"""
+
+macro tank_full
+"""
+    sysbus.adc1 SetVoltage 1 1.50
+"""
+
+# Température d'eau
+macro water_cold
+"""
+    sysbus.adc1 SetVoltage 4 1.612
+"""
+
+macro water_warm
+"""
+    sysbus.adc1 SetVoltage 4 1.676
+"""
+
+macro water_hot
+"""
+    sysbus.adc1 SetVoltage 4 1.846
+"""
+
+macro water_boiling
+"""
+    sysbus.adc1 SetVoltage 4 2.014
+"""

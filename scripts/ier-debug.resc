@@ -1,0 +1,10 @@
+:name: IER — session de debug
+:description: Identique à ier.resc, plus un serveur GDB sur le port 3333
+
+include $ORIGIN/ier.resc
+
+machine StartGdbServer 3333
+
+echo "Serveur GDB prêt sur :3333 — dans un autre terminal :"
+echo "    gdb-multiarch ../ier/Debug/ier.elf -ex 'target remote :3333'"
+echo "Puis 'start' ici pour lancer l'exécution."

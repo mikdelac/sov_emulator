@@ -1,0 +1,21 @@
+# Installation Renode locale (téléchargée par tools/install-renode.sh)
+.renode/
+*.tar.gz
+
+# Sorties d'exécution
+*.log
+logs/
+snapshots/
+*.save
+
+# Fichiers RESD générés
+*.resd
+
+# Résultats des tests Robot
+tests/results/
+robot_output.xml
+log.html
+report.html
+
+# Environnement de test Python
+.venv/

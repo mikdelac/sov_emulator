@@ -1,0 +1,31 @@
+:name: IER — STM32F303xC
+:description: Firmware de régulation Steamovap IER (FreeRTOS) sur STM32F303xC émulé
+
+# ELF chargé — surchargeable :  $bin=@/chemin/vers/autre.elf  avant l'include
+$bin ?= $ORIGIN/../../ier/Debug/ier.elf
+
+# Modèles spécifiques F3 absents de Renode (voir peripherals/)
+include $ORIGIN/../peripherals/STM32F3_RCC.cs
+include $ORIGIN/../peripherals/IER_STM32F3_ADC.cs
+include $ORIGIN/../peripherals/IER_STM32F3_FlashController.cs
+
+mach create "ier"
+machine LoadPlatformDescription $ORIGIN/../platforms/ier_stm32f303.repl
+
+# Les trace_puts du firmware (build Debug) sortent en semihosting
+cpu IsSemihostingEnabled true
+
+# USART1 = Modbus RTU (écran), USART2 = liaison de service
+showAnalyzer sysbus.usart1
+showAnalyzer sysbus.usart2
+
+# Valeurs de capteurs par défaut (machine à l'arrêt, eau tiède, pas de demande)
+include $ORIGIN/sensors.resc
+
+macro reset
+"""
+    sysbus LoadELF $bin
+    runMacro $default_sensors
+"""
+
+runMacro $reset
