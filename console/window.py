@@ -280,9 +280,13 @@ class ConsoleWindow(QMainWindow):
 
         readbacks = Card("Relectures du firmware")
         readbacks.add(label(
-            "ier_core.database · ce que le firmware a lu après conversion et "
-            "filtrage, à comparer aux valeurs injectées", "muted", wrap=True))
-        self.readback_table = ReadbackTable(fw.READBACKS)
+            "ce que le firmware a lu après conversion, à comparer aux valeurs "
+            "injectées · les lignes « échantillon » sont brutes, les autres "
+            "sortent d'une moyenne glissante sur 20 points · l'écart de 10 °C "
+            "sur l'eau vient de wt_offset, nul en flash non programmée",
+            "muted", wrap=True))
+        self.readback_table = ReadbackTable(
+            list(fw.READBACKS) + list(fw.LIVE_READBACKS))
         readbacks.add(self.readback_table)
         column.addWidget(readbacks)
 

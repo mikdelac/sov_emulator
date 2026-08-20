@@ -87,11 +87,12 @@ def check_symbols(elf: Path) -> list:
         table = SymbolTable(elf)
     except SymbolError as error:
         return [str(error)]
-    resolved = table.resolve_all(fw.WATCHED_SYMBOLS + fw.WATCHED_INDIRECT)
+    expected = (fw.WATCHED_SYMBOLS + fw.WATCHED_INDIRECT + fw.WATCHED_ARRAYS
+                + fw.WATCHED_INDICES)
+    resolved = table.resolve_all(expected)
     table.close()
     return [f"{expr} : introuvable dans {elf.name}"
-            for expr in fw.WATCHED_SYMBOLS + fw.WATCHED_INDIRECT
-            if expr not in resolved]
+            for expr in expected if expr not in resolved]
 
 
 def run(session: Session) -> int:
@@ -101,8 +102,9 @@ def run(session: Session) -> int:
     if not problems:
         print(f"macros cohérentes avec scripts/sensors.resc "
               f"({len(fw.MACROS)} vérifiées)")
-        print(f"symboles résolus dans {session.elf} "
-              f"({len(fw.WATCHED_SYMBOLS) + len(fw.WATCHED_INDIRECT)} attendus)")
+        total = (len(fw.WATCHED_SYMBOLS) + len(fw.WATCHED_INDIRECT)
+                 + len(fw.WATCHED_ARRAYS) + len(fw.WATCHED_INDICES))
+        print(f"symboles résolus dans {session.elf} ({total} attendus)")
         return 0
     for problem in problems:
         print(f"écart : {problem}")

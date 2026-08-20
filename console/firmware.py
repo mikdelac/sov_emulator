@@ -100,10 +100,11 @@ ANALOG_INPUTS = [
     ),
     AnalogInput(
         "cab", "PC2", 8, "PT1000 coffret", "°C",
-        -21.0, 100.0, 1.0, 20.0, temperature_to_volts,
-        note="même courbe que l'eau, comme la macro water_* de sensors.resc ; "
-             "ier_core.database->et reste à 0 dans cette configuration, la "
-             "conversion du canal 8 n'est donc pas observable",
+        -21.0, 100.0, 1.0, 20.0,
+        lambda t: temperature_to_volts(t) * (3.3 / 3.0),
+        note="le firmware ne compense pas ce canal : la formule PT1000 suppose "
+             "VDDA = 3,0 V et le coffret n'a pas le facteur 3,3/3,0 appliqué à "
+             "l'eau, il faut donc le présenter en amont",
     ),
 ]
 
@@ -292,8 +293,11 @@ MACROS = [
         "wl": 3.00, "demand": 0, "hum": 50, "water": 20, "hilim_a": 0,
         "cab": 20,
     }),
+    # Les trois contacts doivent être fermés : avec la configuration d'usine
+    # (nonc = 0, tout en normalement fermé) laisser PF9 ouvert maintient
+    # HIGH_RH_IN_DUCT_AL, et toute alarme1 hors mousse force ALARMS_STATE.
     Macro("inputs_running", {"enable": True, "airflow": True,
-                             "hilim": False, "foam": False}),
+                             "hilim": True, "foam": False}),
     Macro("inputs_idle", {"enable": False, "airflow": False,
                           "hilim": False, "foam": False}),
     Macro("enable_on", {"enable": True}),
@@ -343,7 +347,7 @@ class Readback:
 READBACKS = [
     Readback("ier_core.database->wl", "Niveau d'eau", "%"),
     Readback("ier_core.database->wt", "Température d'eau", "°C"),
-    Readback("ier_core.database->et", "Température coffret", "°C"),
+
     Readback("ier_core.database->rh", "Humidité de gaine", "%"),
     Readback("ier_core.database->ad", "Demande analogique filtrée", "%"),
     Readback("ier_core.database->demand", "Demande calculée", "%"),
@@ -368,3 +372,36 @@ CONTROL_SOURCES = {
 }
 
 WATCHED_INDIRECT = [CONTROL_SOURCE] + [r.expr for r in READBACKS]
+
+
+# ---------------------------------------------------------------------------
+# Échantillons convertis — ier_input.cadc, avant filtrage
+# ---------------------------------------------------------------------------
+# Deux raisons de les lire plutôt que de se contenter de ier_core.database :
+#
+#   - `database->et` est du code mort dans cette configuration. Son affectation
+#     est sous `#ifdef OUTSIDE_ENCLOSURE` (désactivé) ou conditionnée à
+#     control_src == DISINFECTION_C_SRC. Le champ reste à 0, ce qui donnerait à
+#     croire que la sonde de coffret lit 0 °C.
+#   - `database->wt` sort d'une moyenne glissante sur 20 échantillons
+#     (fir_filter), soit 5 s de retard. Afficher l'échantillon brut à côté rend
+#     cette convergence visible au lieu de la faire passer pour un écart
+#     d'étalonnage.
+@dataclass(frozen=True)
+class LiveReadback:
+    expr: str          # tableau circulaire, p. ex. ier_input.cadc->et
+    index: str         # symbole donnant l'indice courant
+    label: str
+    unit: str
+    decimals: int = 1
+
+
+LIVE_READBACKS = [
+    LiveReadback("ier_input.cadc->wt", "ier_input.idx",
+                 "Température d'eau (échantillon)", "°C"),
+    LiveReadback("ier_input.cadc->et", "ier_input.idx",
+                 "Température coffret (échantillon)", "°C"),
+]
+
+WATCHED_ARRAYS = [r.expr for r in LIVE_READBACKS]
+WATCHED_INDICES = sorted({r.index for r in LIVE_READBACKS})

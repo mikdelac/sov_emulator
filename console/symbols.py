@@ -61,11 +61,12 @@ class Indirect:
     expr: str
     pointer: Symbol
     offset: int
-    size: int
+    size: int               # taille d'un élément
     kind: str = "int"       # « float » ou « int »
+    count: int = 1          # > 1 pour un tableau, p. ex. cadc->et[100]
 
-    def target(self, pointer_value: int) -> int:
-        return pointer_value + self.offset
+    def target(self, pointer_value: int, index: int = 0) -> int:
+        return pointer_value + self.offset + index * self.size
 
 
 def _address_from_location(value) -> int | None:
@@ -194,6 +195,29 @@ class SymbolTable:
                      if type_die is not None else None)
         return "float" if attribute is not None and attribute.value == 4 else "int"
 
+    def _element_of(self, type_die):
+        """Décrit un champ : (taille unitaire, genre, nombre d'éléments).
+
+        Les tableaux DWARF ne portent pas de DW_AT_byte_size ; sans ce
+        traitement, `cadc->et` — cent flottants — passerait pour un entier de
+        quatre octets, et la console lirait le premier élément en croyant lire
+        la valeur courante.
+        """
+        if type_die is None or type_die.tag != "DW_TAG_array_type":
+            return self._size_of(type_die), self._kind_of(type_die), 1
+        element = self._strip(type_die.get_DIE_from_attribute("DW_AT_type"))
+        count = 0
+        for child in type_die.iter_children():
+            if child.tag != "DW_TAG_subrange_type":
+                continue
+            upper = child.attributes.get("DW_AT_upper_bound")
+            length = child.attributes.get("DW_AT_count")
+            if upper is not None and isinstance(upper.value, int):
+                count = upper.value + 1
+            elif length is not None and isinstance(length.value, int):
+                count = length.value
+        return self._size_of(element), self._kind_of(element), count or 1
+
     def resolve(self, expr: str) -> Symbol:
         """Adresse et taille de `expr`, p. ex. « ier_core.alarm1 »."""
         cached = self._cache.get(expr)
@@ -216,8 +240,8 @@ class SymbolTable:
         target_die = self._strip(type_die.get_DIE_from_attribute("DW_AT_type"))
         offset, field_die = self._walk_members(
             target_die, right.split("."), expr)
-        return Indirect(expr, pointer, offset, self._size_of(field_die),
-                        self._kind_of(field_die))
+        size, kind, count = self._element_of(field_die)
+        return Indirect(expr, pointer, offset, size, kind, count)
 
     def resolve_all(self, exprs) -> dict[str, Symbol]:
         """Résout une liste d'expressions, en ignorant celles qui échouent.
