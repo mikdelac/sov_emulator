@@ -36,6 +36,71 @@ Non-régression :
 ./test.sh                      # 5 tests Robot (~80 s)
 ```
 
+## Console graphique
+
+`./console.sh` ouvre une console PyQt6 qui démarre Renode, pilote les entrées
+et affiche l'état réel du firmware. Elle remplace la saisie de commandes du
+Monitor pour tout ce qui est stimulation de capteurs et observation.
+
+```bash
+./console.sh                   # démarre Renode et ouvre la fenêtre
+./console.sh --attach 12345    # rejoint un Renode lancé avec « -P 12345 »
+./console.sh --self-check      # vérifie la cohérence, sans fenêtre
+./console.sh --interval 300    # période de sondage, en millisecondes
+```
+
+Les dépendances (PyQt6, pyelftools) s'installent au premier lancement dans
+`.venv-console/`, séparé du `.venv/` des tests Robot.
+
+**Rien n'y est simulé côté console.** Les curseurs et les bascules envoient les
+mêmes commandes que `scripts/sensors.resc` ; tout ce qui est affiché en retour
+est lu dans la cible à chaque sondage :
+
+| Affichage | Source lue |
+|---|---|
+| machine à états, alarmes, statut | `ier_core` dans la SRAM, adresses résolues dans le DWARF de l'ELF |
+| relectures capteurs, demande, sortie | `ier_core.database`, déréférencé à l'exécution |
+| sorties tout ou rien | registres `GPIOx_ODR` des ports D et E |
+| sorties PWM | `TIMx_CCR` rapporté à `ARR`, activation lue dans `CCER` |
+| source de commande | `ier_core.param->control_src` |
+| horloge | `machine ElapsedVirtualTime` |
+
+Les adresses ne sont jamais codées en dur : `console/symbols.py` les extrait du
+DWARF au démarrage, y compris les champs atteints par pointeur. Un firmware
+recompilé avec des structures modifiées reste donc lisible sans rien changer.
+
+**Les effets ne sont pas immédiats.** Le firmware filtre les entrées tout ou
+rien sur 25 échantillons pris toutes les 250 ms : il faut laisser passer une
+quinzaine de secondes de temps simulé avant de conclure. Une bascule lue trop
+tôt donne un état transitoire — contacts fermés, la console affiche brièvement
+`ARMED_STATE` sans alarme, puis l'état définitif une fois les filtres pleins.
+Les commandes envoyées apparaissent tout de suite dans le journal, leurs effets
+quand le firmware les a vus.
+
+Le sondage coûte de la vitesse de simulation, une rafale complète faisant une
+trentaine de lectures groupées :
+
+| Période de sondage | Vitesse de simulation |
+|---|---|
+| saturation (sans pause) | 0,67 × temps réel |
+| 150 ms (défaut) | 0,88 × temps réel |
+| 500 ms | 1,00 × temps réel |
+
+`--self-check` relit `scripts/sensors.resc` et vérifie que les seize macros de
+la console produisent exactement les mêmes commandes, puis que tous les
+symboles attendus existent dans l'ELF. C'est ce qui empêche l'interface de
+diverger silencieusement des scripts.
+
+### Polarité des entrées tout ou rien
+
+La console n'annote pas les entrées d'un « fermé = alarme » : `task_control.c`
+choisit entre contact normalement ouvert et normalement fermé selon un vecteur
+de configuration stocké en flash. Elle affiche le niveau de la broche d'un côté
+et les alarmes effectivement levées de l'autre. Avec les paramètres par défaut
+du firmware et les filtres stabilisés, contacts ENABLE, débit d'air et limite
+haute **fermés** donnent `ARMED_STATE` sans alarme ; ouvrir l'un des trois lève
+l'alarme correspondante.
+
 ## Ce qui est émulé
 
 Cible : **STM32F303xC** — Cortex-M4F à 72 MHz, 256 Ko de flash, 40 Ko de SRAM,
@@ -158,6 +223,17 @@ scripts/ier-debug.resc         idem + serveur GDB
 tests/ier-boot.robot           non-régression
 tools/install-renode.sh        installation locale de Renode (version épinglée)
 run.sh / test.sh               lanceurs
+
+console/firmware.py            carte des E/S et vecteurs d'état, relevés dans ../ier
+console/symbols.py             résolution des adresses dans le DWARF de l'ELF
+console/monitor.py             client TCP du Monitor Renode, lectures groupées
+console/session.py             plan de lecture et construction des commandes
+console/worker.py              sondage hors du fil de l'interface
+console/widgets.py             composants dessinés d'après le design system
+console/window.py              fenêtre principale
+console/theme.py               jetons de style steamOvap
+console/selfcheck.py           cohérence console / sensors.resc / ELF
+console.sh                     lanceur de la console
 ```
 
 La version de Renode est épinglée dans `tools/install-renode.sh`. C'est une

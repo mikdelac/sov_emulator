@@ -17,5 +17,10 @@ robot_output.xml
 log.html
 report.html
 
-# Environnement de test Python
+# Environnements Python (tests Robot, console PyQt)
 .venv/
+.venv-console/
+
+# Caches Python
+__pycache__/
+*.pyc
