@@ -91,9 +91,7 @@ class Session:
 
         self._read_plan: list = []      # (genre, clé, commande)
         self._indirect: dict = {}       # expr -> Indirect
-        self._arrays: dict = {}         # expr -> Indirect (tableau circulaire)
         self._pointers: dict = {}       # adresse du pointeur -> valeur lue
-        self._indices: dict = {}        # expr d'indice -> valeur lue
         self._missing: list = []
 
     # -- ouverture / fermeture --------------------------------------------
@@ -123,13 +121,8 @@ class Session:
         self.symbols = SymbolTable(self.elf)
         self.resolved = self.symbols.resolve_all(fw.WATCHED_SYMBOLS)
         self._indirect = self.symbols.resolve_all(fw.WATCHED_INDIRECT)
-        self._arrays = self.symbols.resolve_all(fw.WATCHED_ARRAYS)
-        self._indices_symbols = self.symbols.resolve_all(fw.WATCHED_INDICES)
-        expected = (fw.WATCHED_SYMBOLS + fw.WATCHED_INDIRECT + fw.WATCHED_ARRAYS
-                    + fw.WATCHED_INDICES)
-        known = (set(self.resolved) | set(self._indirect) | set(self._arrays)
-                 | set(self._indices_symbols))
-        self._missing = [e for e in expected if e not in known]
+        self._missing = [e for e in fw.WATCHED_SYMBOLS + fw.WATCHED_INDIRECT
+                         if e not in self.resolved and e not in self._indirect]
         if "ier_core.ier_state" not in self.resolved:
             raise SymbolError(
                 "ier_core.ier_state introuvable dans l'ELF — la console ne "
@@ -174,7 +167,7 @@ class Session:
         """
         plan = list(self._read_plan)
         seen = set()
-        for indirect in list(self._indirect.values()) + list(self._arrays.values()):
+        for indirect in self._indirect.values():
             address = indirect.pointer.address
             if address in seen:
                 continue
@@ -182,11 +175,6 @@ class Session:
             command = self.monitor.read_commands(
                 [(address, indirect.pointer.size)])[0]
             plan.append(("pointer", address, command))
-        for expr, symbol in self._indices_symbols.items():
-            command = self.monitor.read_commands(
-                [(symbol.address, symbol.width)])[0]
-            plan.append(("index", expr, command))
-
         for expr, indirect in self._indirect.items():
             base = self._pointers.get(indirect.pointer.address)
             if not base:
@@ -194,22 +182,6 @@ class Session:
             command = self.monitor.read_commands(
                 [(indirect.target(base), indirect.size)])[0]
             plan.append(("readback", expr, command))
-
-        for live in fw.LIVE_READBACKS:
-            indirect = self._arrays.get(live.expr)
-            if indirect is None:
-                continue
-            base = self._pointers.get(indirect.pointer.address)
-            index = self._indices.get(live.index)
-            if not base or index is None:
-                continue
-            # L'indice est celui du dernier échantillon écrit par la tâche de
-            # lecture ; il est relu à chaque rafale plutôt que déduit, la
-            # console n'ayant aucun moyen fiable de suivre la cadence interne.
-            command = self.monitor.read_commands(
-                [(indirect.target(base, index % indirect.count),
-                  indirect.size)])[0]
-            plan.append(("live", live.expr, command))
         return plan
 
     # -- sondage -----------------------------------------------------------
@@ -236,14 +208,6 @@ class Session:
                 continue
             if kind == "pointer":
                 self._pointers[key] = value
-                continue
-            if kind == "index":
-                self._indices[key] = value
-                continue
-            if kind == "live":
-                indirect = self._arrays[key]
-                snapshot.readbacks[key] = (
-                    _as_float(value) if indirect.kind == "float" else value)
                 continue
             if kind == "readback":
                 indirect = self._indirect[key]
@@ -339,7 +303,6 @@ class Session:
         """
         self.execute(["runMacro $reset", "runMacro $inputs_idle"])
         self._pointers.clear()
-        self._indices.clear()
         self.running = False
         return "runMacro $reset"
 

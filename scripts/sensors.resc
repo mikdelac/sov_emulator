@@ -19,22 +19,11 @@
 #
 #   grandeurs en %  (ad, rh, hl) :  V_adc = pourcentage x 0.03
 #   niveau d'eau (wl)            :  V_adc = tension_capteur x 0.30
-#   PT1000 (wt, canal 4)         :  courbe en racine carrée, très non linéaire.
+#   PT1000 (wt, et)              :  courbe en racine carrée, très non linéaire.
 #                                   Points calculés à partir de la formule :
 #                                     1.500 V -> -21 °C     1.676 V -> 20 °C
 #                                     1.612 V ->   5 °C     1.846 V -> 60 °C
 #                                     1.560 V ->  -7 °C     2.014 V -> 100 °C
-#
-#   PT1000 (et, canal 8)         :  MÊME courbe, mais tension x 3.3/3.0.
-#                                   La formule PT1000 suppose VDDA = 3.0 V
-#                                   (coefficient 0.0007326 = 3.0/4095). Sur la
-#                                   température d'eau, hal.c:2042 rattrape
-#                                   l'écart par un facteur 3.3/3.0 ; sur la
-#                                   température de coffret, hal.c:2243 ne
-#                                   l'applique pas. Avec referenceVoltage: 3.3
-#                                   dans le .repl, il faut donc le présenter en
-#                                   amont, sinon le firmware convertit 1.676 V
-#                                   en -15 °C au lieu de 20 °C.
 #
 # Ne jamais mettre le canal 18 à 0 : adc_conv divise par la moyenne des deux
 # échantillons Vrefint (hal.c:1991).
@@ -61,7 +50,7 @@ macro default_sensors
     sysbus.adc1 SetVoltage 3 1.50       # rh : 50 %
     sysbus.adc1 SetVoltage 4 1.676      # wt : ~20 °C
     sysbus.adc1 SetVoltage 5 0          # hl : 0 %
-    sysbus.adc1 SetVoltage 8 1.8436     # et : ~20 °C (1.676 x 3.3/3.0)
+    sysbus.adc1 SetVoltage 8 1.676      # et : ~20 °C
     sysbus.adc1 SetVoltage 16 1.43      # température interne, ~25 °C
     sysbus.adc1 SetVoltage 18 1.23      # Vrefint
 """
@@ -72,7 +61,7 @@ macro default_sensors
 #   PB8  ENA  interrupteur ENABLE (son absence déclenche une alarme,
 #             cf. USE_ENABLE_SWITCH_AS_ALARM)
 #   PB9  AFS  contrôleur de débit d'air
-#   PF9  HLH  humidistat de limite haute en gaine
+#   PF9  HLH  niveau haut matériel
 #   PF10 FS   détecteur de mousse
 #
 # Pilotage direct :  sysbus.gpioPortB OnGPIO 8 true
@@ -85,18 +74,12 @@ macro inputs_idle
     sysbus.gpioPortF OnGPIO 10 false
 """
 
-# Machine autorisée à fonctionner : ENABLE, débit d'air et limite haute fermés.
-#
-# PF9 doit être fermé comme les deux autres. Avec l'étalonnage usine lu par
-# flash_fetch_systeminfo (nonc_input_vector = 0, tout en normalement fermé), un
-# contact ouvert filtré sur 25 échantillons lève son alarme ; laisser PF9 à
-# false maintenait HIGH_RH_IN_DUCT_AL, et toute alarme1 hors mousse force
-# ALARMS_STATE — la macro ne sortait donc jamais de l'état alarme.
+# Machine autorisée à fonctionner : ENABLE fermé et débit d'air présent.
 macro inputs_running
 """
     sysbus.gpioPortB OnGPIO 8 true
     sysbus.gpioPortB OnGPIO 9 true
-    sysbus.gpioPortF OnGPIO 9 true
+    sysbus.gpioPortF OnGPIO 9 false
     sysbus.gpioPortF OnGPIO 10 false
 """
 

@@ -91,28 +91,6 @@ la console produisent exactement les mêmes commandes, puis que tous les
 symboles attendus existent dans l'ELF. C'est ce qui empêche l'interface de
 diverger silencieusement des scripts.
 
-### Étalonnage usine absent : ce que ça change
-
-La flash non chargée rend `0x0000` sous Renode. Or `VALID_PAGE` vaut aussi
-`0x0000` (`sov_eeflash.h`), donc `flash_fetch_systeminfo()` croit lire une page
-usine valide et récupère tous les offsets à zéro. Deux conséquences visibles
-dans la console, qui ne sont ni des bugs du firmware ni des défauts de
-l'émulation :
-
-- `nonc_input_vector = 0` — tous les contacts sont pris pour normalement
-  fermés. C'est ce qui rend la polarité décrite ci-dessous vraie *pour cette
-  configuration* ; une unité programmée en normalement ouvert se comporterait à
-  l'inverse.
-- `wt_offset = 0 − 10 = −10 °C` (`sov_eeflash.c:209`, la valeur est biaisée de
-  +10 pour tenir dans un mot non signé). `task_control.c:174` l'ajoute, donc
-  `ier_core.database->wt` affiche **10 °C de moins** que l'échantillon converti
-  `ier_input.cadc->wt`. La console montre les deux côte à côte : un écart
-  constant de 10 °C entre « échantillon » et valeur filtrée vient de là, pas
-  d'une erreur de courbe.
-
-Sur une carte réelle à flash effacée on lirait `0xFFFF`, donc `NO_VALID_PAGE`,
-et le firmware partirait en `FACTORY_STATE`.
-
 ### Polarité des entrées tout ou rien
 
 La console n'annote pas les entrées d'un « fermé = alarme » : `task_control.c`
@@ -161,7 +139,7 @@ sysbus.adc1 GetVoltage <canal>
 | 3 | PA2 | humidité de gaine | `V_adc = pourcentage × 0,03` |
 | 4 | PA3 | température d'eau (PT1000) | courbe en racine carrée, voir ci-dessous |
 | 5 | PF4 | limite haute | `V_adc = pourcentage × 0,03` |
-| 8 | PC2 | température du coffret (PT1000) | idem canal 4, **tension × 3,3/3,0** |
+| 8 | PC2 | température du coffret (PT1000) | idem canal 4 |
 | 16 | — | température interne du µC | |
 | 18 | — | Vrefint — **ne jamais mettre à 0** | `adc_conv` divise par cette valeur |
 
@@ -171,25 +149,13 @@ Points de la courbe PT1000 (`adc_conv`, branche `IERPCB001v3_0`) :
 |---|---|---|---|---|---|---|
 | Température | −21 °C | −7 °C | 5 °C | 20 °C | 60 °C | 100 °C |
 
-**Le canal 8 se règle sur cette table multipliée par 3,3/3,0.** La formule
-PT1000 suppose VDDA = 3,0 V (coefficient `0.0007326` = 3,0/4095). Sur la
-température d'eau, `hal.c:2042` rattrape l'écart par un facteur 3,3/3,0 ; sur
-la température de coffret, `hal.c:2243` ne l'applique pas. Avec
-`referenceVoltage: 3.3` dans le `.repl`, présenter 1,676 V sur le canal 8 fait
-donc lire −15 °C au firmware, pas 20 °C.
-
-`ier_core.database->et` ne permet pas de le vérifier : son affectation est sous
-`#ifdef OUTSIDE_ENCLOSURE`, désactivé, ou conditionnée à
-`control_src == DISINFECTION_C_SRC`. Le champ reste à 0. L'échantillon converti
-se lit dans `ier_input.cadc->et[ier_input.idx]`, que la console affiche.
-
 Entrées tout ou rien (`gpi_update`, branche `IERPCB001v2_10`) :
 
 | Broche | Signal | Commande |
 |---|---|---|
 | PB8 | ENABLE (son absence met la machine en alarme) | `sysbus.gpioPortB OnGPIO 8 true` |
 | PB9 | contrôleur de débit d'air | `sysbus.gpioPortB OnGPIO 9 true` |
-| PF9 | humidistat de limite haute en gaine | `sysbus.gpioPortF OnGPIO 9 true` |
+| PF9 | niveau haut matériel | `sysbus.gpioPortF OnGPIO 9 true` |
 | PF10 | détecteur de mousse | `sysbus.gpioPortF OnGPIO 10 true` |
 
 `scripts/sensors.resc` regroupe des macros prêtes à l'emploi : `default_sensors`
