@@ -274,14 +274,17 @@ class Session:
             enabled = (enable is not None
                        and bool(enable & (1 << _CCER_ENABLE_BIT[pwm.channel])))
             # Le firmware écrit CCR = PWM_FACTOR × valeur, soit 0 à ARR+1 en
-            # PWM mode 1 polarité haute (PWM_init, hal.c). Une valeur au-delà
-            # est le contenu de reset du registre : le canal n'a jamais été
-            # piloté, et l'afficher comme 100 % serait un contresens.
-            driven = period > 0 and compare <= period + 1
+            # PWM mode 1 polarité haute (PWM_init, hal.c). Au-delà de ARR, le
+            # matériel ne produit plus aucune correspondance et maintient OCxREF
+            # à 1 (RM0316 §22.3.10) : la broche est réellement à 100 %, pas au
+            # repos. C'est l'état laissé par l'amorçage TIM_Pulse = 0xFFFF.
+            saturated = period > 0 and compare > period
+            duty = None
+            if period > 0:
+                duty = 1.0 if saturated else compare / (period + 1)
             snapshot.pwm[pwm.key] = {
-                "duty": (compare / (period + 1)) if driven else None,
-                "ccr": compare, "arr": period,
-                "enabled": enabled, "driven": driven,
+                "duty": duty, "ccr": compare, "arr": period,
+                "enabled": enabled, "saturated": saturated,
             }
         return snapshot
 

@@ -218,7 +218,7 @@ class ConsoleWindow(QMainWindow):
 
         pwm = Card("Sorties PWM")
         pwm.add(label("rapport cyclique = TIMx_CCR / (ARR + 1) · "
-                      "TIM8 BDTR.MOE n'est pas modélisé par Renode",
+                      "CCR est rechargé par TIM8_CC_IRQHandler et TIM4_IRQHandler",
                       "muted", wrap=True))
         self.pwm_rows = {}
         for index, entry in enumerate(fw.PWM_OUTPUTS):

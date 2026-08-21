@@ -229,10 +229,11 @@ PWM_OUTPUTS = [
               note="TIM8_CH1 · AF4"),
     PwmOutput("blower", "PC7", "TIM8", 2, "Ventilateur externe (SBX)",
               note="TIM8_CH2 · AF4"),
-    PwmOutput("demand_out", "PD14", "TIM4", 1, "Recopie de demande 0-10 V",
-              note="TIM4_CH1 · AF2"),
-    PwmOutput("aux_out", "PD15", "TIM4", 4, "Sortie auxiliaire 0-10 V",
-              note="TIM4_CH4 · AF2"),
+    # PWM_init n'appelle que TIM_OC4Init(TIM4) : PD14 est bien configurée en
+    # fonction alternée mais aucune voie ne l'alimente, et TIM4_CH4 porte la
+    # recopie de output_ssr, pas une sortie auxiliaire (hal.c, TIM4_IRQHandler).
+    PwmOutput("ssr_image", "PD15", "TIM4", 4, "Recopie 0-10 V du SSR",
+              note="TIM4_CH4 · AF2 · échelle 83,3 (12 V -> 10 V)"),
 ]
 
 

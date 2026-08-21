@@ -327,20 +327,22 @@ class PwmRow(QWidget):
             self.meter.set_ratio(0)
             self.lamp.set_on(False)
             return
-        driven, duty, enabled = entry["driven"], entry["duty"], entry["enabled"]
-        if not driven:
-            self.value.setText("non piloté")
+        duty, enabled = entry["duty"], entry["enabled"]
+        if duty is None:
+            self.value.setText("—")
             self.meter.set_ratio(0)
             self.lamp.set_on(False)
-            self.detail.setText(
-                f"{self.pwm.note} · CCR 0x{entry['ccr']:04X} au reset")
+            self.detail.setText(f"{self.pwm.note} · base de temps à l'arrêt")
             return
         self.value.setText(f"{duty * 100:.1f} %")
         self.meter.set_ratio(duty, enabled)
         self.lamp.set_on(duty > 0 and enabled)
-        self.detail.setText(
-            f"{self.pwm.note} · CCR {entry['ccr']} / ARR {entry['arr']}"
-            + ("" if enabled else " · sortie désactivée (CCER)"))
+        detail = f"{self.pwm.note} · CCR {entry['ccr']} / ARR {entry['arr']}"
+        if entry["saturated"]:
+            detail += " · CCR > ARR, sortie bloquée à 100 %"
+        if not enabled:
+            detail += " · sortie désactivée (CCER)"
+        self.detail.setText(detail)
 
 
 # ---------------------------------------------------------------------------

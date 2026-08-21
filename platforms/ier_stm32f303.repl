@@ -182,16 +182,18 @@ timer3: Timers.STM32_Timer @ sysbus 0x40000400
     initialLimit: 0xFFFF
     -> nvic@29                              // timer de la pile FreeModbus
 
-timer4: Timers.STM32_Timer @ sysbus 0x40000800
+timer4: Timers.IER_STM32_TimerPWM @ sysbus 0x40000800
     frequency: 72000000
     initialLimit: 0xFFFF
-    -> nvic@30
+    IRQ -> nvic@30                          // TIM4 : ligne unique, toutes sources
+                                            // TIM4_CH4 (PD15) : recopie 0-10 V du SSR
 
-timer8: Timers.STM32_Timer @ sysbus 0x40013400
+timer8: Timers.IER_STM32_TimerPWM @ sysbus 0x40013400
     frequency: 72000000
     initialLimit: 0xFFFF
+    advanced: true
     [BreakInterrupt, UpdateInterrupt, TriggerInterrupt, CommutationInterrupt] -> nvic@[43, 44, 45, 45]
-    CaptureCompareInterrupt -> nvic@46      // TIM8_CC : PWM SSR
+    CaptureCompareInterrupt -> nvic@46      // TIM8_CC : PWM SSR + soufflante SBX
 
 // ------------------------------- Watchdog / RTC ----------------------------
 

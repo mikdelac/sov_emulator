@@ -165,13 +165,30 @@ compilation.
 | Interface flash | déverrouillage, effacement et EEPROM persistante de `sov_eeflash` | `peripherals/IER_STM32F3_FlashController.cs` |
 | CRC matériel | CRC16-CCITT des trames SPI | `CRC.STM32_CRC` (série F0, polynôme programmable) |
 | USART1/2/3 | Modbus RTU et liaison de service | `UART.STM32F7_USART` |
-| TIM1/2/3/4/8 | PWM des SSR, tick API, pile Modbus | `Timers.STM32_Timer` |
+| TIM4, TIM8 | PWM du SSR, de la soufflante SBX et recopie 0-10 V | `peripherals/IER_STM32_TimerPWM.cs` |
+| TIM1/2/3 | tick API, pile Modbus | `Timers.STM32_Timer` |
 | GPIO A à F, EXTI, IWDG, RTC, SPI2 | | modèles Renode standard |
 | Bit-band périphérique et SRAM | `RCC_LSICmd`, `PWR_BackupAccessCmd`... | `Miscellaneous.BitBanding` |
 
-Trois modèles ont dû être écrits parce que Renode n'en fournit pas d'équivalent
+Quatre modèles ont dû être écrits parce que Renode n'en fournit pas d'équivalent
 utilisable pour le F3 ; chaque fichier de `peripherals/` explique en tête ce qui
 manquait et pourquoi.
+
+Le dernier, `IER_STM32_TimerPWM.cs`, comble le trou le plus lourd de conséquences :
+`Timers.STM32_Timer` ne modélise que la base de temps, ses registres `CCR1..CCR4`
+ne mémorisent rien et `CCxIF` n'est jamais levé. Or `TIM8_CC_IRQHandler` et
+`TIM4_IRQHandler` sont les seuls appelants de `PWM_write()` dans le firmware,
+donc les seuls écrivains de `CCR` : avec le modèle intégré, le SSR de l'élément
+chauffant, la soufflante SBX et la recopie 0-10 V restaient figés pour toute la
+session, la régulation calculant un rapport cyclique que rien ne transmettait.
+Le rapport cyclique effectivement présenté sur une broche se relit désormais
+depuis le moniteur :
+
+```
+sysbus.timer8 GetDutyCycle 1     # SSR, PC6
+sysbus.timer8 GetDutyCycle 2     # soufflante SBX, PC7
+sysbus.timer4 GetDutyCycle 4     # recopie 0-10 V, PD15
+```
 
 ## Injecter des valeurs de capteurs
 
@@ -257,9 +274,14 @@ recompiler pour les voir.
   Rejouer des trames capturées demanderait un modèle esclave dédié.
 - **Aucun maître Modbus.** Les trames émises sur USART1 sont visibles dans
   l'analyseur, mais rien ne répond côté hôte.
-- **Temporisations approchées.** Les PWM des SSR (TIM1/TIM8) et la pile Modbus
-  (TIM3) tournent à des fréquences approchées : les mesures de temps fines ne
-  sont pas représentatives du matériel.
+- **Temporisations approchées.** La pile Modbus (TIM3) tourne à une fréquence
+  approchée et TIM1 reste sur le modèle intégré, sans canal de comparaison : les
+  mesures de temps fines ne sont pas représentatives du matériel. TIM4 et TIM8,
+  eux, comptent à la période programmée par `PWM_init` (2 MHz, ARR + 1 = 10000,
+  soit 200 Hz).
+- **Sorties PWM non reliées aux broches.** Renode ne relie pas les fonctions
+  alternées des GPIO aux timers : `GetDutyCycle` est la seule observation du
+  signal, et PC6, PC7 et PD15 restent à zéro côté `gpioPortC`/`gpioPortD`.
 - **RCC, RTC et IWDG fonctionnels, pas fidèles au cycle près** — les bits d'état
   suivent immédiatement les commandes, sans temps de stabilisation.
 - **Programmation flash non filtrée.** Le firmware écrit directement dans la
@@ -267,8 +289,58 @@ recompiler pour les voir.
   n'est pas appliquée. Sans effet ici, `sov_eeflash` effaçant toujours la page
   avant de la réécrire, mais un firmware qui l'oublierait passerait au travers.
 - Quelques avertissements subsistent au démarrage sur des bits non modélisés
-  (SPI2 `CR2.DS`, TIM8 `BDTR.MOE`, RTC `CR.TSE`, priorité NVIC de l'IRQ 16) :
-  aucun n'affecte l'exécution.
+  (SPI2 `CR2.DS`, RTC `CR.TSE`, priorité NVIC de l'IRQ 16) : aucun n'affecte
+  l'exécution.
+
+### Défauts du firmware mis au jour par ce modèle
+
+La chaîne PWM du firmware se pilote elle-même : `TIM8_CC_IRQHandler` et
+`TIM4_IRQHandler` sont les seuls appelants de `PWM_write()`, donc les seuls
+écrivains de `CCR`, et ils ne s'exécutent que sur une correspondance de
+comparaison. Toute valeur de `CCR` strictement supérieure à `ARR` interrompt
+définitivement ce bouclage : le compteur ne l'atteint jamais, `CCxIF` ne se lève
+plus, l'ISR ne s'exécute plus, et `OCxREF` reste maintenu à 1 (RM0316 §22.3.10),
+c'est-à-dire **la sortie bloquée à 100 %**. `PWM_init` prend deux fois ce piège.
+
+**À l'initialisation.** `tim_ocinit_t.TIM_Pulse = 0xFFFF` alors que `ARR` vaut
+9999 : le PWM ne démarre jamais. Dès la mise sous tension, le SSR de l'élément
+chauffant, la soufflante SBX et la recopie 0-10 V sont commandés à 100 %.
+
+**À pleine puissance.** `PWM_write` écrit `CCR = PWM_FACTOR × valeur`, soit
+`100 × 100 = 10000` pour 100 %, une unité au-dessus de `ARR = 9999`. Or
+`state_update` force `output_ssr = 100` à chaque entrée en `STEAM_ON_STATE` tant
+que l'eau est sous 95 °C. La toute première commande de pleine puissance tue donc
+le bouclage, définitivement : la régulation continue de calculer correctement,
+mais plus rien n'atteint la sortie.
+
+Ce n'est pas un artefact d'émulation, le modèle reproduisant ici le comportement
+documenté du silicium. Le scénario se rejoue dans la console : machine armée,
+demande à 50 %, eau portée à 98 °C, puis demande ramenée à 20 %.
+
+| | `output_ssr` | `TIM8_CCR1` | broche PC6 |
+|---|---|---|---|
+| démarrage | 0 % | 65535 | 100 % |
+| entrée en production, eau froide | 100 % | 10000 | 100 % |
+| eau à 98 °C, demande 50 % | 49,99 % | 10000 | 100 % |
+| demande 20 % | 20,01 % | 10000 | 100 % |
+
+Côté firmware, deux corrections d'une ligne lèvent les deux verrous : amorcer
+`TIM_Pulse = 0` — la correspondance à `CNT = 0` a lieu à chaque période et le
+PWM démarre à rapport cyclique nul, qui est aussi l'état sûr — et porter
+`pwm_period` à 10001 pour que `ARR = 10000` accueille la pleine échelle de
+`PWM_FACTOR`. Les deux se vérifient sans recompiler le firmware, en corrigeant
+`ARR` puis en provoquant une correspondance depuis le moniteur :
+
+```
+(machine) sysbus WriteDoubleWord 0x4001342C 10000   # TIM8_ARR
+(machine) sysbus WriteDoubleWord 0x40013434 5000    # TIM8_CCR1, amorçage
+```
+
+Le même scénario donne alors 100 %, 49 %, 100 % puis 20 % sur PC6, la broche
+suivant `output_ssr` comme sur une machine réelle. `tests/ier-pwm.robot`
+verrouille les deux moitiés du diagnostic : qu'une valeur au-delà de `ARR` ne
+produit aucune correspondance, et qu'une seule correspondance suffit à relancer
+l'ISR.
 
 ## Organisation
 
@@ -281,6 +353,7 @@ scripts/eeprom.resc            image de l'EEPROM et macros associées
 scripts/ier-debug.resc         idem + serveur GDB
 tests/ier-boot.robot           non-régression du démarrage
 tests/ier-eeprom.robot         non-régression de l'EEPROM
+tests/ier-pwm.robot            non-régression de la chaîne PWM (TIM4, TIM8)
 tests/firmware_symbols.py      adresses du firmware pour les tests
 tools/install-renode.sh        installation locale de Renode (version épinglée)
 tools/mkeeprom.py              générateur d'image EEPROM

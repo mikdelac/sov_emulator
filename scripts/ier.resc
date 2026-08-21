@@ -8,6 +8,7 @@ $bin ?= $ORIGIN/../../ier/Debug/ier.elf
 include $ORIGIN/../peripherals/STM32F3_RCC.cs
 include $ORIGIN/../peripherals/IER_STM32F3_ADC.cs
 include $ORIGIN/../peripherals/IER_STM32F3_FlashController.cs
+include $ORIGIN/../peripherals/IER_STM32_TimerPWM.cs
 
 mach create "ier"
 machine LoadPlatformDescription $ORIGIN/../platforms/ier_stm32f303.repl
