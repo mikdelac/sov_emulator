@@ -22,9 +22,13 @@ showAnalyzer sysbus.usart2
 # Valeurs de capteurs par défaut (machine à l'arrêt, eau tiède, pas de demande)
 include $ORIGIN/sensors.resc
 
+# EEPROM émulée : image persistante des onze pages de flash utilisateur
+include $ORIGIN/eeprom.resc
+
 macro reset
 """
     sysbus LoadELF $bin
+    runMacro $eeprom_reload
     runMacro $default_sensors
 """
 

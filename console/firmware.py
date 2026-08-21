@@ -192,6 +192,21 @@ OUTPUT_PORTS = sorted({o.port for o in DIGITAL_OUTPUTS})
 
 
 # ---------------------------------------------------------------------------
+# EEPROM émulée — sov_eeflash.c
+# ---------------------------------------------------------------------------
+# La console n'a besoin que d'une chose : savoir si la page d'usine est valide,
+# ce qui décide si le firmware peut quitter FACTORY_STATE. Le plan mémoire
+# complet est relu dans sov_eeflash.h par tools/mkeeprom.py ; ces deux valeurs
+# sont vérifiées contre l'en-tête par le contrôle de cohérence.
+EEPROM_BASE_ADDRESS = 0x08030000
+EEPROM_PAGE_SIZE = 0x800
+EEPROM_FACTORY_PAGE = 10
+EEPROM_VALID_PAGE = 0x0000
+EEPROM_FACTORY_HEADER = (EEPROM_BASE_ADDRESS
+                         + EEPROM_FACTORY_PAGE * EEPROM_PAGE_SIZE)
+
+
+# ---------------------------------------------------------------------------
 # Sorties PWM — PWM_init (hal.c)
 # ---------------------------------------------------------------------------
 TIMER_BASE = {"TIM4": 0x40000800, "TIM8": 0x40013400}

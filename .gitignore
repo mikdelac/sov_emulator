@@ -8,6 +8,10 @@ logs/
 snapshots/
 *.save
 
+# Image de l'EEPROM émulée : état d'une carte, propre à chaque poste, et
+# régénérable par tools/mkeeprom.py
+var/
+
 # Fichiers RESD générés
 *.resd
 

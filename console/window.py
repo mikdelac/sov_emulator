@@ -57,6 +57,7 @@ class ConsoleWindow(QMainWindow):
     request_start = pyqtSignal()
     request_pause = pyqtSignal()
     request_reset = pyqtSignal()
+    request_factory = pyqtSignal()
     request_open = pyqtSignal()
     request_close = pyqtSignal()
 
@@ -138,6 +139,16 @@ class ConsoleWindow(QMainWindow):
         self.reset_button.clicked.connect(self._reset)
         self.reset_button.setEnabled(False)
         row.addWidget(self.reset_button)
+
+        self.factory_button = QPushButton("Configuration usine")
+        self.factory_button.setToolTip(
+            "Écrit la page d'usine dans l'EEPROM et redémarre le firmware.\n"
+            "Sans elle, une carte neuve reste en FACTORY_STATE : la\n"
+            "configuration passe normalement par l'écran, dont le lien SPI\n"
+            "n'est pas émulé.")
+        self.factory_button.clicked.connect(self._load_factory_config)
+        self.factory_button.setEnabled(False)
+        row.addWidget(self.factory_button)
         return bar
 
     def _inputs_pane(self) -> QWidget:
@@ -276,6 +287,11 @@ class ConsoleWindow(QMainWindow):
         alarms.add(label("status", "muted"))
         self.status_list = FlagList("aucun bit de statut")
         alarms.add(self.status_list)
+        alarms.add(separator())
+        # Décide si le firmware peut quitter FACTORY_STATE : c'est l'en-tête de
+        # la page d'usine, relu dans la flash émulée à chaque sondage.
+        self.eeprom_label = label("EEPROM : —", "muted", wrap=True)
+        alarms.add(self.eeprom_label)
         column.addWidget(alarms)
 
         readbacks = Card("Relectures du firmware")
@@ -313,6 +329,7 @@ class ConsoleWindow(QMainWindow):
         self.request_start.connect(self.worker.start)
         self.request_pause.connect(self.worker.pause)
         self.request_reset.connect(self.worker.reset)
+        self.request_factory.connect(self.worker.load_factory_config)
 
         self.worker.opened.connect(self._on_opened)
         self.worker.failed.connect(self._on_failed)
@@ -364,6 +381,16 @@ class ConsoleWindow(QMainWindow):
         for row in self.digital_rows.values():
             row.set_value(False)
 
+    def _load_factory_config(self) -> None:
+        """Configure la carte en usine ; le firmware redémarre dans la foulée."""
+        self.request_factory.emit()
+        self._running = False
+        self._refresh_run_button()
+        for key, row in self.analog_rows.items():
+            row.set_value(fw.ANALOG_BY_KEY[key].default)
+        for row in self.digital_rows.values():
+            row.set_value(False)
+
     def _refresh_run_button(self) -> None:
         self.run_button.setText("Pause" if self._running else "Start")
         self.run_button.setObjectName("secondary" if self._running else "primary")
@@ -378,7 +405,9 @@ class ConsoleWindow(QMainWindow):
             f"{origin} · Monitor :{info['port']} · {info['elf']}")
         self.run_button.setEnabled(True)
         self.reset_button.setEnabled(True)
+        self.factory_button.setEnabled(True)
         self.log.append(0.0, f"session ouverte sur le port {info['port']}")
+        self.log.append(0.0, f"image EEPROM : {info['eeprom']}")
         self.log.append(0.0, f"journal Renode : {info['log']}")
         if info["missing"]:
             self.log.append(
@@ -423,6 +452,17 @@ class ConsoleWindow(QMainWindow):
             self._last_alarms = alarms
 
         self.status_list.set_flags(snapshot.status_flags)
+        configured = snapshot.factory_configured
+        if configured is None:
+            self.eeprom_label.setText("EEPROM : —")
+        elif configured:
+            self.eeprom_label.setText(
+                "EEPROM : page d'usine valide · réglages conservés d'une "
+                "session à l'autre")
+        else:
+            self.eeprom_label.setText(
+                "EEPROM : page d'usine vierge · le firmware reste en "
+                "FACTORY_STATE — « Configuration usine » l'en sort")
         self.control_source.setText(
             f"source de commande : {snapshot.control_source}")
         self.readback_table.update_values(snapshot.readbacks)

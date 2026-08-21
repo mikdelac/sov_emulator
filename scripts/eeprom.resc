@@ -1,0 +1,50 @@
+:name: EEPROM émulée IER
+:description: Image persistante des onze pages de flash utilisateur (sov_eeflash)
+
+# ---------------------------------------------------------------------------
+# Le firmware émule une EEPROM dans les onze dernières pages de la flash, à
+# partir de 0x08030000 : dix pages tournantes pour les paramètres de régulation
+# et une onzième pour les informations d'usine (numéro de série, modèle,
+# étalonnages, vecteur NO/NC des entrées tout ou rien).
+#
+# Le contrôleur flash (peripherals/IER_STM32F3_FlashController.cs) porte toute
+# la mécanique : remise à 0xFF au reset, chargement de l'image, et sauvegarde
+# automatique chaque fois que le firmware reverrouille la flash après avoir
+# réécrit une page. Ce script ne fait que désigner le fichier.
+#
+# L'image est régénérable et n'est pas suivie par git :
+#
+#   python3 tools/mkeeprom.py --blank    var/eeprom.bin   # carte neuve
+#   python3 tools/mkeeprom.py --factory  var/eeprom.bin   # configurée en usine
+#   python3 tools/mkeeprom.py --patch    var/eeprom.bin   # ajoute l'usine
+#                                                         # sans perdre les
+#                                                         # pages déjà écrites
+#
+# Une image absente n'est pas une erreur : l'EEPROM démarre alors vierge, et le
+# fichier est créé à la première écriture du firmware.
+# ---------------------------------------------------------------------------
+
+$eeprom ?= $ORIGIN/../var/eeprom.bin
+
+sysbus.flashCtrl PersistenceFile $eeprom
+
+# Recharge l'image du disque dans la cible. Le firmware ne relit la flash qu'au
+# démarrage de sa tâche de monitoring : faire suivre d'un « runMacro $reset ».
+macro eeprom_reload
+"""
+    sysbus.flashCtrl LoadEeprom
+"""
+
+# Écrit l'état courant de l'EEPROM dans l'image, sans attendre la prochaine
+# écriture du firmware.
+macro eeprom_save
+"""
+    sysbus.flashCtrl SaveEeprom
+"""
+
+# Remet les onze pages à 0xFF dans la cible — carte neuve, sans toucher à
+# l'image sur le disque tant que rien n'est réécrit.
+macro eeprom_erase
+"""
+    sysbus.flashCtrl EraseEeprom
+"""

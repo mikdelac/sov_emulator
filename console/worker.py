@@ -45,6 +45,7 @@ class SessionWorker(QObject):
             "log": str(self.session.log_path),
             "spawned": self.session.process is not None,
             "missing": self.session.missing_symbols,
+            "eeprom": str(self.session.eeprom_image),
         })
         self._timer = QTimer(self)
         self._timer.setInterval(self.interval_ms)
@@ -105,3 +106,10 @@ class SessionWorker(QObject):
     @pyqtSlot()
     def reset(self) -> None:
         self._run(self.session.reset)
+
+    @pyqtSlot()
+    def load_factory_config(self) -> None:
+        # Patche l'image de l'EEPROM puis relance le firmware : c'est le seul
+        # moyen de sortir de FACTORY_STATE, le lien SPI avec l'écran — par où
+        # passe la configuration d'usine réelle — n'étant pas émulé.
+        self._run(self.session.load_factory_config)

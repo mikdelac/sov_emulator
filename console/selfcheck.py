@@ -23,6 +23,9 @@ _ON_GPIO = re.compile(r"sysbus\.gpioPort(\w+)\s+OnGPIO\s+(\d+)\s+(true|false)")
 _TOLERANCE = 1e-3
 # Canaux réglés une fois pour toutes au reset et jamais exposés dans l'IHM.
 _UNEXPOSED = set(fw.FIXED_CHANNELS)
+# Début de la flash : le `.repl` exprime la zone EEPROM en offset dans la
+# mémoire, sov_eeflash.h en adresse absolue.
+_FLASH_BASE_ADDRESS = 0x08000000
 
 
 def _parse(script: Path) -> dict:
@@ -94,15 +97,63 @@ def check_symbols(elf: Path) -> list:
             if expr not in resolved]
 
 
+def check_eeprom(session: Session) -> list:
+    """Écarts entre le plan mémoire de l'EEPROM et sov_eeflash.h.
+
+    La console adresse la page d'usine en dur, et le contrôleur flash émulé
+    déclare la taille de la zone dans le `.repl` : les deux mentent en silence
+    si le firmware réorganise ses pages. Le générateur, lui, relit l'en-tête à
+    chaque exécution — c'est donc lui qui fait référence.
+    """
+    from .session import _load_mkeeprom
+
+    header = session.root.parent / "ier/include/sov_eeflash.h"
+    if not header.is_file():
+        return [f"{header} introuvable"]
+    try:
+        layout = _load_mkeeprom(session.root).Layout(header)
+    except Exception as error:            # noqa: BLE001 — remonté tel quel
+        return [f"plan mémoire EEPROM illisible : {error}"]
+
+    problems = []
+    expected = (("adresse de base", fw.EEPROM_BASE_ADDRESS, layout.base_address),
+                ("taille de page", fw.EEPROM_PAGE_SIZE, layout.page_size),
+                ("page d'usine", fw.EEPROM_FACTORY_PAGE, layout.factory_page),
+                ("en-tête de page valide", fw.EEPROM_VALID_PAGE, layout.valid_page))
+    for name, console_value, header_value in expected:
+        if console_value != header_value:
+            problems.append(
+                f"EEPROM {name} — console 0x{console_value:X}, "
+                f"sov_eeflash.h 0x{header_value:X}")
+
+    repl = (session.root / "platforms/ier_stm32f303.repl").read_text(
+        encoding="utf-8")
+    for name, value in (("eepromOffset",
+                         layout.base_address - _FLASH_BASE_ADDRESS),
+                        ("eepromSize", layout.size)):
+        declared = re.search(rf"^\s*{name}:\s*(0[xX][0-9A-Fa-f]+|\d+)\s*$",
+                             repl, re.M)
+        if declared is None:
+            problems.append(f"{name} absent de la plateforme")
+        elif int(declared.group(1), 0) != value:
+            problems.append(
+                f"plateforme {name} — déclaré {declared.group(1)}, "
+                f"sov_eeflash.h 0x{value:X}")
+    return problems
+
+
 def run(session: Session) -> int:
     """Exécute les contrôles et rend un code de sortie de type shell."""
     problems = (check_macros(session.root / "scripts/sensors.resc")
-                + check_symbols(session.elf))
+                + check_symbols(session.elf)
+                + check_eeprom(session))
     if not problems:
         print(f"macros cohérentes avec scripts/sensors.resc "
               f"({len(fw.MACROS)} vérifiées)")
         print(f"symboles résolus dans {session.elf} "
               f"({len(fw.WATCHED_SYMBOLS) + len(fw.WATCHED_INDIRECT)} attendus)")
+        print("plan mémoire EEPROM cohérent avec sov_eeflash.h "
+              "(console, plateforme et générateur d'image)")
         return 0
     for problem in problems:
         print(f"écart : {problem}")

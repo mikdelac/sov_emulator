@@ -62,6 +62,10 @@ flashCtrl: MTD.IER_STM32F3_FlashController @ sysbus 0x40022000
     flash: flash
     flashBaseAddress: 0x08000000
     pageSize: 0x800
+    // EEPROM émulée de sov_eeflash : onze pages de 2 Ko à partir de 0x08030000,
+    // dix pour les paramètres et la onzième pour les informations d'usine.
+    eepromOffset: 0x30000
+    eepromSize: 0x5800
 
 pwr: Miscellaneous.STM32_PWR @ sysbus 0x40007000
 

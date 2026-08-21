@@ -33,7 +33,7 @@ gdb-multiarch ../ier/Debug/ier.elf -ex 'target remote :3333'
 Non-régression :
 
 ```bash
-./test.sh                      # 5 tests Robot (~80 s)
+./test.sh                      # 10 tests Robot (~130 s)
 ```
 
 ## Console graphique
@@ -63,6 +63,7 @@ est lu dans la cible à chaque sondage :
 | sorties tout ou rien | registres `GPIOx_ODR` des ports D et E |
 | sorties PWM | `TIMx_CCR` rapporté à `ARR`, activation lue dans `CCER` |
 | source de commande | `ier_core.param->control_src` |
+| état de l'EEPROM | en-tête de la page d'usine, lu dans la flash émulée |
 | horloge | `machine ElapsedVirtualTime` |
 
 Les adresses ne sont jamais codées en dur : `console/symbols.py` les extrait du
@@ -101,6 +102,55 @@ du firmware et les filtres stabilisés, contacts ENABLE, débit d'air et limite
 haute **fermés** donnent `ARMED_STATE` sans alarme ; ouvrir l'un des trois lève
 l'alarme correspondante.
 
+## EEPROM émulée
+
+Le firmware range ses réglages dans les onze dernières pages de la flash
+(`0x08030000`, `sov_eeflash.c`) : dix pages tournantes pour les paramètres de
+régulation, une onzième pour les informations d'usine — numéro de série,
+modèle, étalonnages, et le vecteur NO/NC qui décide de la polarité des entrées
+tout ou rien.
+
+Cette zone se comporte comme la flash d'une vraie carte. Elle démarre à `0xFF`,
+comme une flash effacée, et **ce que le firmware y écrit est conservé** d'une
+session à l'autre dans `var/eeprom.bin`. Le contrôleur flash émulé écrit
+l'image de lui-même, chaque fois que le firmware reverrouille la flash après
+avoir réécrit une page ; rien n'est sondé et la vitesse de simulation n'en
+souffre pas.
+
+Une carte neuve n'a pas d'informations d'usine : le firmware démarre en
+`FACTORY_STATE` et y reste. Sur le matériel, c'est l'écran 7 pouces qui l'en
+sort, par un lien SPI que Renode ne modélise pas — le bouton **« Configuration
+usine »** de la console écrit donc la page d'usine dans l'EEPROM et redémarre
+le firmware. Le vecteur NO/NC qu'il installe vaut zéro, soit toutes les entrées
+normalement fermées : la polarité décrite plus haut reste vraie.
+
+L'image se fabrique aussi en ligne de commande, sans lancer Renode :
+
+```bash
+python3 tools/mkeeprom.py --blank   var/eeprom.bin   # carte neuve
+python3 tools/mkeeprom.py --factory var/eeprom.bin   # carte configurée
+python3 tools/mkeeprom.py --patch   var/eeprom.bin   # ajoute l'usine sans
+                                                     # perdre les pages écrites
+```
+
+Les offsets ne sont jamais recopiés : `tools/mkeeprom.py` relit le plan mémoire
+dans `../ier/include/sov_eeflash.h` à chaque exécution, et `./console.sh
+--self-check` vérifie que la console et la plateforme s'accordent avec lui. Le
+fichier `var/eeprom.bin` est propre à chaque poste et n'est pas suivi par git ;
+le supprimer rend la carte neuve.
+
+Depuis le Monitor, trois macros complètent le tableau :
+
+```
+(ier) runMacro $eeprom_save      # force l'écriture de l'image
+(ier) runMacro $eeprom_reload    # relit l'image dans la cible
+(ier) runMacro $eeprom_erase     # remet les onze pages à 0xFF
+```
+
+Un rechargement d'image n'a d'effet qu'au démarrage suivant : le firmware ne
+lit sa flash qu'au lancement de sa tâche de monitoring. Faire suivre d'un
+`machine Reset`.
+
 ## Ce qui est émulé
 
 Cible : **STM32F303xC** — Cortex-M4F à 72 MHz, 256 Ko de flash, 40 Ko de SRAM,
@@ -112,7 +162,7 @@ compilation.
 | ADC1 + séquenceur | 9 conversions, mode continu | `peripherals/IER_STM32F3_ADC.cs` |
 | DMA1 ch1 | ADC1 vers `adc1_dma_value` | `DMA.STM32LDMA` |
 | RCC | horloges, LSI/LSE, PLL | `peripherals/STM32F3_RCC.cs` |
-| Interface flash | déverrouillage et effacement pour `sov_eeflash` | `peripherals/IER_STM32F3_FlashController.cs` |
+| Interface flash | déverrouillage, effacement et EEPROM persistante de `sov_eeflash` | `peripherals/IER_STM32F3_FlashController.cs` |
 | CRC matériel | CRC16-CCITT des trames SPI | `CRC.STM32_CRC` (série F0, polynôme programmable) |
 | USART1/2/3 | Modbus RTU et liaison de service | `UART.STM32F7_USART` |
 | TIM1/2/3/4/8 | PWM des SSR, tick API, pile Modbus | `Timers.STM32_Timer` |
@@ -187,10 +237,14 @@ sysbus GetSymbolAddress "xTickCount"
 sysbus ReadDoubleWord <adresse>
 ```
 
-Au démarrage, avec les entrées à zéro, le firmware passe en `ALARMS_STATE` :
-c'est le comportement attendu, l'entrée ENABLE étant configurée en alarme
-(`USE_ENABLE_SWITCH_AS_ALARM`). `runMacro $inputs_running` le ramène en
-`STANDBY_STATE`.
+Sur une EEPROM vierge, le firmware démarre en `FACTORY_STATE` : il attend sa
+configuration d'usine, comme une carte sortie de production. Le bouton
+« Configuration usine » de la console l'en sort (voir *EEPROM émulée*).
+
+Une fois la carte configurée, avec les entrées à zéro, le firmware passe en
+`ALARMS_STATE` : c'est le comportement attendu, l'entrée ENABLE étant
+configurée en alarme (`USE_ENABLE_SWITCH_AS_ALARM`). `runMacro $inputs_running`
+le ramène en `STANDBY_STATE`.
 
 Les `trace_puts` du firmware sortent en semihosting dans le journal Renode, mais
 la plupart sont commentés dans les sources : il faut les décommenter et
@@ -208,6 +262,10 @@ recompiler pour les voir.
   sont pas représentatives du matériel.
 - **RCC, RTC et IWDG fonctionnels, pas fidèles au cycle près** — les bits d'état
   suivent immédiatement les commandes, sans temps de stabilisation.
+- **Programmation flash non filtrée.** Le firmware écrit directement dans la
+  mémoire ; la règle matérielle « un bit ne passe que de 1 à 0 sans effacement »
+  n'est pas appliquée. Sans effet ici, `sov_eeflash` effaçant toujours la page
+  avant de la réécrire, mais un firmware qui l'oublierait passerait au travers.
 - Quelques avertissements subsistent au démarrage sur des bits non modélisés
   (SPI2 `CR2.DS`, TIM8 `BDTR.MOE`, RTC `CR.TSE`, priorité NVIC de l'IRQ 16) :
   aucun n'affecte l'exécution.
@@ -219,9 +277,14 @@ platforms/ier_stm32f303.repl   description de la carte et du SoC
 peripherals/*.cs               modèles compilés à la volée par Renode
 scripts/ier.resc               script principal
 scripts/sensors.resc           stimuli capteurs et entrées TOR
+scripts/eeprom.resc            image de l'EEPROM et macros associées
 scripts/ier-debug.resc         idem + serveur GDB
-tests/ier-boot.robot           non-régression
+tests/ier-boot.robot           non-régression du démarrage
+tests/ier-eeprom.robot         non-régression de l'EEPROM
+tests/firmware_symbols.py      adresses du firmware pour les tests
 tools/install-renode.sh        installation locale de Renode (version épinglée)
+tools/mkeeprom.py              générateur d'image EEPROM
+var/eeprom.bin                 état de la carte, hors dépôt
 run.sh / test.sh               lanceurs
 
 console/firmware.py            carte des E/S et vecteurs d'état, relevés dans ../ier
@@ -232,7 +295,7 @@ console/worker.py              sondage hors du fil de l'interface
 console/widgets.py             composants dessinés d'après le design system
 console/window.py              fenêtre principale
 console/theme.py               jetons de style steamOvap
-console/selfcheck.py           cohérence console / sensors.resc / ELF
+console/selfcheck.py           cohérence console / sensors.resc / ELF / EEPROM
 console.sh                     lanceur de la console
 ```
 

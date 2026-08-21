@@ -28,7 +28,7 @@ export PATH="${VENV}/bin:${PATH}"
 
 TARGETS=("$@")
 if [ ${#TARGETS[@]} -eq 0 ]; then
-    TARGETS=("${HERE}/tests/ier-boot.robot")
+    TARGETS=("${HERE}/tests/ier-boot.robot" "${HERE}/tests/ier-eeprom.robot")
 fi
 
 exec "${HERE}/.renode/renode-test" --results-dir "${HERE}/tests/results" "${TARGETS[@]}"
